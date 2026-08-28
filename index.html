@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>英語學習 - S型異質分組座位生成器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #3b82f6;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* 完善的列印與 PDF 匯出樣式 */
+        @media print {
+            @page { size: A4 portrait; margin: 12mm; }
+            body { 
+                background-color: white !important; 
+                -webkit-print-color-adjust: exact !important; 
+                print-color-adjust: exact !important; 
+                padding: 0 !important;
+            }
+            .no-print, .no-print * { display: none !important; }
+            
+            /* 讓版面在列印時展開，取消容器限制 */
+            .max-w-6xl { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+            #resultsSection { display: block !important; margin-top: 0 !important; }
+            
+            /* 強制設定為雙欄，最適合 A4 紙張列印 */
+            #groupsContainer { 
+                display: grid !important; 
+                grid-template-columns: repeat(2, 1fr) !important; 
+                gap: 10mm !important; 
+            }
+            
+            .group-card { 
+                break-inside: avoid !important; 
+                page-break-inside: avoid !important; 
+                border: 1.5px solid #cbd5e1 !important; 
+                box-shadow: none !important; 
+                margin-bottom: 0 !important;
+            }
+            
+            /* 確保背景色能順利印出 */
+            .bg-gray-50 { background-color: #f8fafc !important; }
+            .bg-gray-200 { background-color: #e2e8f0 !important; }
+            .border-b { border-bottom: 1px solid #e5e7eb !important; }
+            .border-t-8 { border-top-width: 6px !important; }
+        }
+    </style>
+</head>
+<body class="text-gray-800 p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- Header -->
+        <div class="bg-white rounded-2xl shadow-sm p-6 no-print">
+            <h1 class="text-2xl font-bold text-blue-600 mb-2">🎓 英語學習：S型異質分組座位生成器</h1>
+            <p class="text-sm text-gray-600 leading-relaxed">
+                採用 <strong>全班總排名 S型分布</strong> (第1名👉第1組, 第2名👉第2組...折返)，並結合蒙地卡羅演算法自動微調。<br>
+                保證特色：<strong>自動分配任意人數（如28人分5組）</strong>、組內 1號保證為最高分，且男女完全間隔坐。
+            </p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 no-print">
+            <!-- Left Column: Data Input -->
+            <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm p-6 flex flex-col h-full">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold border-l-4 border-blue-500 pl-2">1. 學生資料</h2>
+                    <div class="flex gap-2">
+                        <label for="csvFileInput" class="cursor-pointer text-sm bg-green-50 text-green-700 px-3 py-1.5 rounded-lg border border-green-200 hover:bg-green-100 transition shadow-sm flex items-center gap-1 font-medium">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                            上傳 CSV
+                        </label>
+                        <input type="file" id="csvFileInput" accept=".csv" class="hidden" onchange="handleFileUpload(event)">
+                        <button onclick="loadDefaultData()" class="text-sm bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-100 transition shadow-sm font-medium">載入範例</button>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mb-2">可直接貼上資料或上傳 CSV 檔案。標題列需包含「號碼,姓名,成績,性別」。</p>
+                <textarea id="csvInput" class="w-full flex-grow min-h-[250px] p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-sm" placeholder="號碼,姓名,成績,性別&#10;1,王小明,95,男&#10;2,李小華,88,女&#10;..."></textarea>
+            </div>
+
+            <!-- Right Column: Rules & Actions -->
+            <div class="bg-white rounded-2xl shadow-sm p-6 flex flex-col gap-6">
+                <div>
+                    <h2 class="text-lg font-semibold border-l-4 border-red-500 pl-2 mb-2">2. 備註欄 (排他約束)</h2>
+                    <p class="text-xs text-gray-500 mb-2">輸入不能在同一組的號碼，每行一組，用逗號隔開。<br>例如輸入 <code>2,6</code> 代表 2號和 6號不能同組。</p>
+                    <textarea id="exclusionRules" class="w-full h-24 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none font-mono text-sm" placeholder="2,6&#10;1,3"></textarea>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-semibold border-l-4 border-green-500 pl-2 mb-2">3. 參數設定</h2>
+                    <div class="flex flex-wrap gap-4 mb-2">
+                        <label class="text-sm text-gray-700 flex items-center gap-2">
+                            <span>預期組數:</span>
+                            <input type="number" id="numGroups" value="5" min="1" max="10" class="w-16 p-1 border rounded text-center">
+                        </label>
+                        <label class="text-sm text-gray-700 flex items-center gap-2">
+                            <span>最大分差:</span>
+                            <input type="number" id="maxDiff" value="6" min="1" max="20" class="w-16 p-1 border rounded text-center">
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-400">若人數無法整除 (如28人分5組)，系統會自動安排5人組。男女比例需盡量平均以達成間隔坐。</p>
+                </div>
+
+                <div class="mt-auto pt-4">
+                    <button id="generateBtn" onclick="startGeneration()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl transition duration-200 flex justify-center items-center gap-2 shadow-md">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A12.014 12.014 0 0010.5 1h-.5q-.357 0-.7.046a1 1 0 00-.814.73l-.365 1.46a1 1 0 01-.652.651l-1.46.365a1 1 0 00-.73.814Q5.23 5.42 5 5.83a1 1 0 00.285 1.056l1.08 1.08a1 1 0 010 1.414l-1.08 1.08a1 1 0 00-.285 1.056q.231.41.527.764a1 1 0 00.73.814l1.46.365a1 1 0 01.652.652l.365 1.46a1 1 0 00.814.73q.344.045.7.046h.5q.357 0 .7-.046a1 1 0 00.814-.73l.365-1.46a1 1 0 01.652-.652l1.46-.365a1 1 0 00.73-.814q.295-.353.527-.764a1 1 0 00-.285-1.056l-1.08-1.08a1 1 0 010-1.414l1.08-1.08a1 1 0 00.285-1.056q-.231-.41-.527-.764a1 1 0 00-.73-.814l-1.46-.365a1 1 0 01-.652-.651l-.365-1.46a1 1 0 00-.814-.73zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
+                        開始生成座位圖
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="hidden fixed inset-0 bg-gray-900 bg-opacity-50 z-50 flex flex-col justify-center items-center">
+            <div class="spinner mb-4"></div>
+            <p class="text-white font-semibold animate-pulse" id="loadingText">演算法計算中 (S-Shape + Monte Carlo)...</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorContainer" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm no-print">
+            <p class="font-bold">錯誤</p>
+            <p id="errorMessage"></p>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="hidden space-y-6">
+            <!-- 將 no-print 移至按鈕上，確保標題能被印出 -->
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-800">📊 異質分組座位表</h2>
+                    <p id="statsText" class="text-sm text-gray-600 mt-1"></p>
+                </div>
+                <button onclick="triggerPrint()" class="no-print bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-lg text-sm flex items-center gap-2 shadow transition-transform hover:scale-105">
+                    🖨️ 列印 / 存為 PDF
+                </button>
+            </div>
+            
+            <div id="groupsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <!-- Group Cards -->
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function triggerPrint() {
+            // 給予瀏覽器一點時間渲染後再列印
+            setTimeout(() => {
+                try {
+                    window.print();
+                } catch (e) {
+                    alert("您的瀏覽器環境目前阻擋了彈出列印視窗。\n請直接使用鍵盤快捷鍵 Ctrl+P (Windows) 或 Cmd+P (Mac) 來開啟列印！");
+                }
+            }, 300);
+        }
+
+        const GROUP_SIZE = 6;
+        const MAX_ATTEMPTS = 50000;
+
+        const defaultCSV = `號碼,姓名,成績,性別
+1,陳冠宇,98,男
+2,林雅婷,95,女
+3,張家豪,92,男
+4,李婉婷,90,女
+5,王柏翰,88,男
+6,吳佳穎,85,女
+7,劉建宏,83,男
+8,蔡欣儀,81,女
+9,楊宗憲,79,男
+10,許靜茹,77,女
+11,鄭威廉,75,男
+12,謝宜蓁,73,女
+13,郭彥均,71,男
+14,洪詩涵,69,女
+15,邱子軒,67,男
+16,曾雅筑,65,女
+17,廖俊傑,63,男
+18,賴佩珊,61,女
+19,徐浩恩,59,男
+20,周芷若,57,女
+21,蘇宇翔,55,男
+22,莊心妍,53,女
+23,葉宇軒,51,男
+24,彭佳慧,49,女
+25,呂承翰,47,男
+26,高玉婷,45,女
+27,孫志明,100,男
+28,黃麗玲,40,女
+29,林俊傑,94,男
+30,陳嘉樺,91,女`;
+
+        function loadDefaultData() {
+            document.getElementById('csvInput').value = defaultCSV;
+            document.getElementById('exclusionRules').value = "2,6";
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('csvInput').value = e.target.result;
+            };
+            reader.readAsText(file, 'UTF-8');
+            event.target.value = '';
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const parts = lines[i].split(',').map(s => s.trim());
+                if (parts.length < 4) continue;
+                
+                const [id, name, score, gender] = parts;
+                if (!id || !name || !score || !gender) continue;
+                
+                data.push({
+                    id: parseInt(id),
+                    name: name,
+                    score: parseFloat(score),
+                    gender: gender
+                });
+            }
+            return data;
+        }
+
+        function parseExclusions(text) {
+            if (!text.trim()) return [];
+            return text.trim().split('\n').map(line => {
+                return line.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+            }).filter(arr => arr.length > 1);
+        }
+
+        function calculateSeating(data, exclusions, maxScoreDiff, targetGroups) {
+            let allMales = data.filter(d => d.gender === '男');
+            let allFemales = data.filter(d => d.gender === '女');
+            let numGroups = targetGroups;
+
+            // 1. 預先檢查男女比例是否能滿足間隔坐
+            let minMalesNeeded = 0;
+            let maxMalesAllowed = 0;
+            let tempSizes = Array(numGroups).fill(0);
+            for(let i=0; i<data.length; i++) tempSizes[i % numGroups]++;
+            
+            for(let size of tempSizes) {
+                minMalesNeeded += Math.floor(size / 2);
+                maxMalesAllowed += Math.ceil(size / 2);
+            }
+            
+            if (allMales.length < minMalesNeeded || allMales.length > maxMalesAllowed) {
+                throw new Error(`全班男女比例（${allMales.length}男 / ${allFemales.length}女）無法在 ${numGroups} 組中滿足「男女交錯坐」的條件。請調整組數或名單男女比例。`);
+            }
+
+            let allSelected = [...allMales, ...allFemales];
+            let attempts = 0;
+            let jitterMax = 0; // 動態擾動參數
+
+            while (attempts < MAX_ATTEMPTS) {
+                attempts++;
+                
+                // 動態增加擾動幅度以繞過排他約束
+                if (attempts % 500 === 0) jitterMax += 1.5; 
+
+                // 2. 套用 Jitter 並進行總排名排序
+                let jStudents = allSelected.map(s => ({...s, _sort: s.score + (Math.random() * jitterMax * 2 - jitterMax)}));
+                jStudents.sort((a, b) => b._sort - a._sort);
+
+                // 3. 嚴格整體 S 型分發 (Snake Distribution)
+                let tempGroups = Array.from({length: numGroups}, () => []);
+                let dir = 1; let gIdx = 0;
+                for (let i = 0; i < jStudents.length; i++) {
+                    tempGroups[gIdx].push(jStudents[i]);
+                    gIdx += dir;
+                    // 碰壁折返
+                    if (gIdx >= numGroups) { gIdx = numGroups - 1; dir = -1; }
+                    else if (gIdx < 0) { gIdx = 0; dir = 1; }
+                }
+
+                // 4. 性別平衡 (Swapping) - 處理任意人數
+                let unbalanced = true;
+                let balanceAttempts = 0;
+                while (unbalanced && balanceAttempts < 50) {
+                    balanceAttempts++;
+                    let gTooManyMales = tempGroups.find(g => g.filter(s => s.gender === '男').length > Math.ceil(g.length / 2));
+                    let gTooManyFemales = tempGroups.find(g => g.filter(s => s.gender === '女').length > Math.ceil(g.length / 2));
+
+                    if (!gTooManyMales || !gTooManyFemales) {
+                        unbalanced = false;
+                        break;
+                    }
+
+                    // 在兩組之間尋找分數最相近的一男一女進行交換，維持 S 型成績平衡
+                    let bestDiff = Infinity;
+                    let mIdxToSwap = -1;
+                    let fIdxToSwap = -1;
+
+                    for (let i = 0; i < gTooManyMales.length; i++) {
+                        if (gTooManyMales[i].gender !== '男') continue;
+                        for (let j = 0; j < gTooManyFemales.length; j++) {
+                            if (gTooManyFemales[j].gender !== '女') continue;
+                            
+                            let diff = Math.abs(gTooManyMales[i].score - gTooManyFemales[j].score);
+                            if (diff < bestDiff) {
+                                bestDiff = diff;
+                                mIdxToSwap = i;
+                                fIdxToSwap = j;
+                            }
+                        }
+                    }
+
+                    // 執行交換
+                    if (mIdxToSwap !== -1 && fIdxToSwap !== -1) {
+                        let temp = gTooManyMales[mIdxToSwap];
+                        gTooManyMales[mIdxToSwap] = gTooManyFemales[fIdxToSwap];
+                        gTooManyFemales[fIdxToSwap] = temp;
+                    } else {
+                        break;
+                    }
+                }
+                
+                if (unbalanced) continue; // 若無法平衡則重試
+
+                // 5. 驗證排他約束與平均分與性別差異
+                let isValid = true;
+                let groupAverages = [];
+
+                for (let g of tempGroups) {
+                    // 二次確認性別差異 <= 1
+                    let mCount = g.filter(s => s.gender === '男').length;
+                    let fCount = g.filter(s => s.gender === '女').length;
+                    if (Math.abs(mCount - fCount) > 1) {
+                        isValid = false; break;
+                    }
+
+                    let groupIds = g.map(s => s.id);
+                    for (let rule of exclusions) {
+                        if (rule.every(id => groupIds.includes(id))) {
+                            isValid = false; break;
+                        }
+                    }
+                    if (!isValid) break;
+
+                    let sum = g.reduce((acc, curr) => acc + curr.score, 0);
+                    groupAverages.push(sum / g.length);
+                }
+
+                // 驗證平均分差值
+                if (isValid) {
+                    const maxAvg = Math.max(...groupAverages);
+                    const minAvg = Math.min(...groupAverages);
+                    if ((maxAvg - minAvg) > maxScoreDiff) isValid = false; 
+                }
+
+                // 6. 排序與組合 (1號最高，男女動態間隔)
+                if (isValid) {
+                    let finalGroups = [];
+                    for (let g of tempGroups) {
+                        let gMales = g.filter(s => s.gender === '男').sort((a,b) => b.score - a.score);
+                        let gFemales = g.filter(s => s.gender === '女').sort((a,b) => b.score - a.score);
+
+                        let sortedGroup = [];
+                        let i = 0, j = 0;
+                        let turn = 'M';
+                        
+                        // 決定誰先排：人數多的一方先排，若人數相同則高分者先排
+                        if (gMales.length > gFemales.length) {
+                            turn = 'M';
+                        } else if (gFemales.length > gMales.length) {
+                            turn = 'F';
+                        } else if (gMales.length > 0 && gFemales.length > 0) {
+                            turn = (gMales[0].score > gFemales[0].score) ? 'M' : 'F';
+                        }
+
+                        while(i < gMales.length || j < gFemales.length) {
+                            if (turn === 'M' && i < gMales.length) {
+                                sortedGroup.push(gMales[i++]);
+                                turn = 'F';
+                            } else if (turn === 'F' && j < gFemales.length) {
+                                sortedGroup.push(gFemales[j++]);
+                                turn = 'M';
+                            } else {
+                                if (i < gMales.length) sortedGroup.push(gMales[i++]);
+                                if (j < gFemales.length) sortedGroup.push(gFemales[j++]);
+                            }
+                        }
+
+                        sortedGroup.forEach(s => delete s._sort);
+                        finalGroups.push(sortedGroup);
+                    }
+
+                    return {
+                        groups: finalGroups,
+                        attempts: attempts,
+                        averages: groupAverages
+                    };
+                }
+            }
+
+            throw new Error(`已嘗試 ${MAX_ATTEMPTS} 次，無法找到符合所有條件的解。\n請嘗試放寬「最大分差」或減少「排他約束」。`);
+        }
+
+        function renderResults(result) {
+            const container = document.getElementById('groupsContainer');
+            const statsText = document.getElementById('statsText');
+            container.innerHTML = '';
+
+            const avgs = result.averages;
+            const overallAvg = (avgs.reduce((a,b)=>a+b,0) / avgs.length).toFixed(2);
+            const maxAvg = Math.max(...avgs).toFixed(2);
+            const minAvg = Math.min(...avgs).toFixed(2);
+            
+            statsText.innerHTML = `基於 S型分布，歷經 <strong>${result.attempts}</strong> 次微調找到最佳解。<br>
+                                   班級總平均: <strong>${overallAvg}</strong> | 組間最高平均: ${maxAvg} | 最低平均: ${minAvg}`;
+
+            result.groups.forEach((group, index) => {
+                let groupAvg = avgs[index].toFixed(2);
+
+                let cardHTML = `
+                    <div class="bg-white rounded-2xl shadow-sm border-t-8 border-blue-500 overflow-hidden group-card">
+                        <div class="px-5 py-3 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                            <h3 class="font-bold text-lg text-gray-800">Group ${index + 1}</h3>
+                            <span class="text-xs font-semibold px-2 py-1 bg-gray-200 text-gray-700 rounded-full">
+                                平均 ${groupAvg}
+                            </span>
+                        </div>
+                        <div class="p-0">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+                                    <tr>
+                                        <th class="px-4 py-2">Seat (座位)</th>
+                                        <th class="px-4 py-2">No. (號碼)</th>
+                                        <th class="px-4 py-2">Name (姓名)</th>
+                                        <th class="px-4 py-2">Score (成績)</th>
+                                        <th class="px-4 py-2">Gender (性別)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                `;
+
+                group.forEach((student, sIdx) => {
+                    const rowClass = 'border-b border-gray-50 hover:bg-gray-50';
+                    const genderColor = student.gender === '男' ? 'text-blue-600' : 'text-pink-600';
+                    let seatLabel = `#${sIdx + 1}`; // 純粹顯示 1~6，不帶任何多餘文字
+
+                    cardHTML += `
+                        <tr class="${rowClass}">
+                            <td class="px-4 py-2 font-medium text-gray-900">${seatLabel}</td>
+                            <td class="px-4 py-2 font-bold">${student.id}</td>
+                            <td class="px-4 py-2 font-medium text-gray-700">${student.name}</td>
+                            <td class="px-4 py-2">${student.score}</td>
+                            <td class="px-4 py-2 font-semibold ${genderColor}">${student.gender}</td>
+                        </tr>
+                    `;
+                });
+
+                cardHTML += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += cardHTML;
+            });
+
+            document.getElementById('resultsSection').classList.remove('hidden');
+        }
+
+        function startGeneration() {
+            document.getElementById('errorContainer').classList.add('hidden');
+            document.getElementById('resultsSection').classList.add('hidden');
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+
+            const csvText = document.getElementById('csvInput').value;
+            const exclText = document.getElementById('exclusionRules').value;
+            const maxDiff = parseFloat(document.getElementById('maxDiff').value) || 6;
+            const numGroups = parseInt(document.getElementById('numGroups').value) || 5;
+
+            setTimeout(() => {
+                try {
+                    const data = parseCSV(csvText);
+                    const exclusions = parseExclusions(exclText);
+                    if (data.length === 0) throw new Error("無效的資料，請檢查格式。");
+
+                    const result = calculateSeating(data, exclusions, maxDiff, numGroups);
+                    renderResults(result);
+
+                } catch (error) {
+                    document.getElementById('errorMessage').innerText = error.message;
+                    document.getElementById('errorContainer').classList.remove('hidden');
+                } finally {
+                    document.getElementById('loadingOverlay').classList.add('hidden');
+                }
+            }, 50);
+        }
+        
+        window.onload = loadDefaultData;
+    </script>
+</body>
+</html>
